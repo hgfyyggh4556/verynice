@@ -9,21 +9,22 @@ jobs:
     timeout-minutes: 360
 
     steps:
+
+      # ------------------------------
+      # ENABLE RDP
+      # ------------------------------
       - name: Configure Core RDP Settings
         shell: pwsh
         run: |
           Write-Host "Enabling Remote Desktop..."
           try {
-            # Enable RDP
             Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
             Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
             Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
 
-            # Firewall rule
             netsh advfirewall firewall delete rule name="RDP-Tailscale" | Out-Null
             netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389 | Out-Null
 
-            # Restart service safely
             Stop-Service TermService -Force -ErrorAction SilentlyContinue
             Start-Service TermService -ErrorAction SilentlyContinue
 
@@ -32,6 +33,9 @@ jobs:
             Write-Host "⚠️ Error during RDP setup: $($_.Exception.Message)"
           }
 
+      # ------------------------------
+      # CREATE USER
+      # ------------------------------
       - name: Create RDP User with Secure Password
         shell: pwsh
         run: |
@@ -62,29 +66,43 @@ jobs:
             Write-Host "⚠️ Failed to create RDP user: $($_.Exception.Message)"
           }
 
+      # ------------------------------
+      # INSTALL TAILSCALE
+      # ------------------------------
       - name: Install Tailscale
         shell: pwsh
         run: |
           Write-Host "Installing Tailscale..."
-            Add-Type -AssemblyName System.Security          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          Add-Type -AssemblyName System.Security
+          
+          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
           $installer = "$env:TEMP\tailscale.msi"
+          
           Invoke-WebRequest -Uri $url -OutFile $installer
+          
           Start-Process msiexec.exe -ArgumentList "/i", "`"$installer`"", "/quiet", "/norestart" -Wait
+          
           Remove-Item $installer -Force
+          
           Write-Host "✅ Tailscale installed successfully."
 
+      # ------------------------------
+      # CONNECT TAILSCALE
+      # ------------------------------
       - name: Connect to Tailscale
         shell: pwsh
         run: |
           Write-Host "Connecting to Tailscale..."
+
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
-          
+
           $tsIP = $null
           for ($i=0; $i -lt 10; $i++) {
             $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
             if ($tsIP) { break }
             Start-Sleep -Seconds 5
           }
+
           if (-not $tsIP) {
             Write-Host "⚠️ Tailscale IP not found."
             exit 0
@@ -93,6 +111,9 @@ jobs:
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
           Write-Host "✅ Connected. Tailscale IP: $tsIP"
 
+      # ------------------------------
+      # DISPLAY RDP LOGIN DETAILS
+      # ------------------------------
       - name: Show RDP Info
         shell: pwsh
         run: |
